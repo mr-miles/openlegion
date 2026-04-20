@@ -1,0 +1,230 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentinstances.openlegion.ai
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.0.0
+spec:
+  group: openlegion.ai
+  names:
+    kind: AgentInstance
+    listKind: AgentInstanceList
+    plural: agentinstances
+    singular: agentinstance
+    shortNames:
+      - ai
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Fleet
+          type: string
+          jsonPath: .spec.fleetRef.name
+        - name: Agent
+          type: string
+          jsonPath: .spec.agentName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Pod
+          type: string
+          jsonPath: .status.podRef
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["agentName", "role"]
+              properties:
+                agentName:
+                  type: string
+                  description: >
+                    Agent identifier. Must match AGENT_ID_RE_PATTERN.
+                    Used as AGENT_ID env var inside the container.
+                  pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+                fleetRef:
+                  type: object
+                  description: >
+                    Reference to the parent AgentFleet. Set by the AgentFleet
+                    controller. Empty for ad-hoc agents spawned directly.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                role:
+                  type: string
+                  description: Agent role description. Set as AGENT_ROLE env var.
+                  maxLength: 512
+                model:
+                  type: string
+                  description: LLM model identifier. Set as LLM_MODEL env var.
+                image:
+                  type: string
+                  description: Container image for the agent pod.
+                  default: "openlegion-agent:latest"
+                imagePullPolicy:
+                  type: string
+                  enum: ["Always", "IfNotPresent", "Never"]
+                  default: "IfNotPresent"
+                meshUrl:
+                  type: string
+                  description: >
+                    URL of the mesh host service, e.g.
+                    http://openlegion-mesh.openlegion.svc:8420
+                    Set as MESH_URL env var.
+                thinking:
+                  type: string
+                  description: Extended thinking mode. Set as THINKING env var.
+                  enum: ["", "enabled", "disabled"]
+                mcpServers:
+                  type: array
+                  description: >
+                    MCP server configs. Serialized to JSON and set as
+                    MCP_SERVERS env var.
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                ephemeral:
+                  type: boolean
+                  description: >
+                    If true, this agent was spawned on demand (not a fleet member)
+                    and will be culled after idleTimeoutSeconds of inactivity.
+                  default: false
+                idleTimeoutSeconds:
+                  type: integer
+                  description: >
+                    Seconds of inactivity before an ephemeral agent is culled.
+                    Ignored for non-ephemeral fleet agents.
+                  default: 3600
+                  minimum: 60
+                resourceLimits:
+                  type: object
+                  description: Container resource limits.
+                  properties:
+                    memory:
+                      type: string
+                      description: Memory limit. K8s quantity string, e.g. 384Mi
+                      default: "384Mi"
+                    cpu:
+                      type: string
+                      description: CPU limit. K8s quantity string, e.g. 150m
+                      default: "150m"
+                    memoryRequest:
+                      type: string
+                    cpuRequest:
+                      type: string
+                authTokenRef:
+                  type: object
+                  description: >
+                    Reference to the K8s Secret holding this agent's MESH_AUTH_TOKEN.
+                    The controller creates the secret; the pod reads it via secretKeyRef.
+                  properties:
+                    secretName:
+                      type: string
+                    key:
+                      type: string
+                credentialRefs:
+                  type: array
+                  description: >
+                    Additional K8s Secret references to inject as env vars.
+                    Same semantics as AgentFleet.spec.agents[].credentialRefs.
+                  items:
+                    type: object
+                    required: ["name", "key"]
+                    properties:
+                      name:
+                        type: string
+                      key:
+                        type: string
+                      envVar:
+                        type: string
+                env:
+                  type: array
+                  description: >
+                    Additional env vars to set in the container (non-secret values only).
+                    Secret values must use credentialRefs or authTokenRef.
+                  items:
+                    type: object
+                    required: ["name", "value"]
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                instructionsConfigMap:
+                  type: string
+                  description: >
+                    Name of a ConfigMap containing the agent's INITIAL_INSTRUCTIONS.
+                    Created by the controller when instructions exceed 4096 bytes.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: Current lifecycle phase.
+                  enum:
+                    - Pending       # CR created, pod not yet started
+                    - Running       # Pod running, agent responding to /status
+                    - Idle          # Running but no activity for idleTimeoutSeconds
+                    - CrashLoopBackOff  # Pod failed repeatedly
+                    - Terminating   # Deletion in progress
+                    - Unknown       # Phase cannot be determined
+                podRef:
+                  type: string
+                  description: Name of the managed Pod.
+                podIP:
+                  type: string
+                  description: IP address of the running pod.
+                serviceRef:
+                  type: string
+                  description: Name of the ClusterIP Service for this agent.
+                agentUrl:
+                  type: string
+                  description: Full URL to reach the agent, e.g. http://svc-name.ns.svc:8400
+                lastHeartbeat:
+                  type: string
+                  format: date-time
+                  description: Timestamp of last successful /status health check.
+                idleSince:
+                  type: string
+                  format: date-time
+                  description: >
+                    Timestamp when agent entered idle state. Null if not idle.
+                    Controller uses this with idleTimeoutSeconds for culling.
+                startTime:
+                  type: string
+                  format: date-time
+                  description: Timestamp when the pod first entered Running state.
+                restartCount:
+                  type: integer
+                  description: Number of times the controller has recreated the pod.
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        enum: ["PodReady", "MeshReachable", "Idle"]
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string

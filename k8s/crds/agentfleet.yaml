@@ -1,0 +1,238 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentfleets.openlegion.ai
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.0.0
+spec:
+  group: openlegion.ai
+  names:
+    kind: AgentFleet
+    listKind: AgentFleetList
+    plural: agentfleets
+    singular: agentfleet
+    shortNames:
+      - af
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Running
+          type: integer
+          jsonPath: .status.runningAgents
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyAgents
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["agents"]
+              properties:
+                defaultModel:
+                  type: string
+                  description: >
+                    Default LLM model for agents in this fleet that do not
+                    specify their own model. Passed as LLM_MODEL env var.
+                  example: "claude-opus-4-5"
+                agents:
+                  type: array
+                  description: List of agent definitions in this fleet.
+                  minItems: 1
+                  items:
+                    type: object
+                    required: ["name", "role"]
+                    properties:
+                      name:
+                        type: string
+                        description: >
+                          Agent identifier. Must match AGENT_ID_RE_PATTERN:
+                          1-64 chars, alphanumeric start, then [a-zA-Z0-9_-].
+                        pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+                      role:
+                        type: string
+                        description: Short description of this agent's role. Used as AGENT_ROLE.
+                        maxLength: 512
+                      model:
+                        type: string
+                        description: >
+                          LLM model override for this agent. If empty, uses
+                          spec.defaultModel or the mesh host's configured default.
+                      instructions:
+                        type: string
+                        description: >
+                          Agent instructions (system prompt body). Stored verbatim
+                          in INITIAL_INSTRUCTIONS env var if <= 4096 bytes, otherwise
+                          the controller creates a ConfigMap and mounts it.
+                      soul:
+                        type: string
+                        description: >
+                          Agent personality/soul text. Injected into SOUL.md bootstrap file.
+                      heartbeat:
+                        type: string
+                        description: >
+                          Heartbeat rules text. Injected into HEARTBEAT.md bootstrap file.
+                      thinking:
+                        type: string
+                        description: Extended thinking mode. Set as THINKING env var.
+                        enum: ["", "enabled", "disabled"]
+                      permissions:
+                        type: object
+                        description: Agent ACL configuration.
+                        properties:
+                          blackboardRead:
+                            type: array
+                            items:
+                              type: string
+                            description: Glob patterns for blackboard read access.
+                          blackboardWrite:
+                            type: array
+                            items:
+                              type: string
+                            description: Glob patterns for blackboard write access.
+                          canPublish:
+                            type: array
+                            items:
+                              type: string
+                            description: Topics this agent may publish to.
+                          canSubscribe:
+                            type: array
+                            items:
+                              type: string
+                            description: Topics this agent may subscribe to.
+                          allowedApis:
+                            type: array
+                            items:
+                              type: string
+                          allowedCredentials:
+                            type: array
+                            items:
+                              type: string
+                          canUseBrowser:
+                            type: boolean
+                            default: false
+                          canSpawn:
+                            type: boolean
+                            default: false
+                          canManageCron:
+                            type: boolean
+                            default: false
+                      resources:
+                        type: object
+                        description: Container resource requests and limits.
+                        properties:
+                          memoryLimit:
+                            type: string
+                            description: "Max memory. K8s quantity string, e.g. 384Mi"
+                            default: "384Mi"
+                          cpuLimit:
+                            type: string
+                            description: "Max CPU. K8s quantity string, e.g. 150m"
+                            default: "150m"
+                          memoryRequest:
+                            type: string
+                            description: "Requested memory. Defaults to memoryLimit / 2."
+                          cpuRequest:
+                            type: string
+                            description: "Requested CPU. Defaults to cpuLimit / 2."
+                      budget:
+                        type: object
+                        description: LLM API spending limits enforced by the mesh cost tracker.
+                        properties:
+                          dailyUsd:
+                            type: number
+                            minimum: 0
+                            default: 5.0
+                          monthlyUsd:
+                            type: number
+                            minimum: 0
+                            default: 100.0
+                      mcpServers:
+                        type: array
+                        description: MCP server configurations. Serialized as MCP_SERVERS env var.
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            config:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                      credentialRefs:
+                        type: array
+                        description: >
+                          References to K8s Secrets to inject into agent pods.
+                          The controller mounts these via valueFrom.secretKeyRef.
+                          Never embed raw credential values in the CRD spec.
+                        items:
+                          type: object
+                          required: ["name", "key"]
+                          properties:
+                            name:
+                              type: string
+                              description: Name of the K8s Secret.
+                            key:
+                              type: string
+                              description: Key within the Secret.
+                            envVar:
+                              type: string
+                              description: >
+                                Name of the env var to set in the container.
+                                Defaults to the Secret key name if not specified.
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  description: Last generation observed by the controller.
+                phase:
+                  type: string
+                  description: Overall fleet phase.
+                  enum: ["Pending", "Running", "Degraded", "Stopped"]
+                runningAgents:
+                  type: integer
+                  description: Number of agents with phase Running.
+                readyAgents:
+                  type: integer
+                  description: Number of agents responding to health checks.
+                agentSummary:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      phase:
+                        type: string
+                      podRef:
+                        type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
